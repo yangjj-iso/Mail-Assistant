@@ -207,14 +207,22 @@ func (w *Watcher) processMessage(msg *imapClient.Message, section *imapClient.Bo
 	}
 
 	preview := body
-	if len(preview) > 200 {
-		preview = preview[:200]
+	runes := []rune(preview)
+	if len(runes) > 200 {
+		preview = string(runes[:200])
 	}
 
 	finalLabel := result.Stage1Label
 	if result.Stage2Label != nil && *result.Stage2Label != "" {
 		finalLabel = *result.Stage2Label
 	}
+
+	// Job classification
+	jobResult, err := w.classifier.PredictJob(body, subject)
+	if err != nil {
+		log.Printf("[JobClassify] %s error: %v", messageID, err)
+	}
+	isJob := jobResult != nil && jobResult.IsJob
 
 	email := model.Email{
 		AccountID:    w.account.ID,
@@ -229,12 +237,7 @@ func (w *Watcher) processMessage(msg *imapClient.Message, section *imapClient.Bo
 		ClassifiedAt: time.Now(),
 	}
 
-	// Job classification
-	jobResult, err := w.classifier.PredictJob(body, subject)
-	if err != nil {
-		log.Printf("[JobClassify] %s error: %v", messageID, err)
-	}
-	if jobResult != nil && jobResult.IsJob {
+	if isJob {
 		email.IsJob = true
 		email.JobStage = jobResult.Stage
 		entJSON, _ := json.Marshal(jobResult.Entities)

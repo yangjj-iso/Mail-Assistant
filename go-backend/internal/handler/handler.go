@@ -6,9 +6,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"mail-classifier/internal/classifier"
@@ -27,6 +31,52 @@ type Handler struct {
 	Hub        *ws.Hub
 	EncKey     []byte
 	ImapMgr    *imapMgr.Manager
+}
+
+func parseChineseDateTime(s string) *time.Time {
+	s = strings.ReplaceAll(s, " ", "")
+	patterns := []struct {
+		re     *regexp.Regexp
+		layout string
+	}{
+		{regexp.MustCompile(`(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2}):(\d{2})`), "2006-01-02 15:04"},
+		{regexp.MustCompile(`(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2})点(\d{2})分?`), "2006-01-02 15:04"},
+		{regexp.MustCompile(`(\d{4})年(\d{1,2})月(\d{1,2})日(\d{1,2})点`), "2006-01-02 15:04"},
+		{regexp.MustCompile(`(\d{1,2})月(\d{1,2})日(\d{1,2}):(\d{2})`), "01-02 15:04"},
+		{regexp.MustCompile(`(\d{1,2})月(\d{1,2})日(\d{1,2})点(\d{2})分?`), "01-02 15:04"},
+	}
+	for _, p := range patterns {
+		m := p.re.FindStringSubmatch(s)
+		if m == nil {
+			continue
+		}
+		var year, month, day, hour, minute int
+		if len(m) == 6 {
+			year, _ = strconv.Atoi(m[1])
+			month, _ = strconv.Atoi(m[2])
+			day, _ = strconv.Atoi(m[3])
+			hour, _ = strconv.Atoi(m[4])
+			minute, _ = strconv.Atoi(m[5])
+		} else if len(m) == 5 {
+			year = time.Now().Year()
+			month, _ = strconv.Atoi(m[1])
+			day, _ = strconv.Atoi(m[2])
+			hour, _ = strconv.Atoi(m[3])
+			minute, _ = strconv.Atoi(m[4])
+		} else if len(m) == 4 {
+			year, _ = strconv.Atoi(m[1])
+			month, _ = strconv.Atoi(m[2])
+			day, _ = strconv.Atoi(m[3])
+			hour = 9
+			minute = 0
+		}
+		loc, _ := time.LoadLocation("Asia/Shanghai")
+		t := time.Date(year, time.Month(month), day, hour, minute, 0, 0, loc)
+		log.Printf("[parseChineseDateTime] input=%q parsed=%v", s, t)
+		return &t
+	}
+	log.Printf("[parseChineseDateTime] input=%q no match", s)
+	return nil
 }
 
 func NewHandler(db *gorm.DB, cl *classifier.Client, hub *ws.Hub, encKey string) *Handler {
@@ -51,10 +101,14 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/emails", h.listEmails)
 	api.GET("/emails/:id", h.getEmail)
 	api.GET("/stats", h.getStats)
+	api.GET("/stats/job", h.getJobStats)
 	api.GET("/applications", h.listApplications)
+	api.GET("/applications/upcoming", h.upcomingInterviews)
+	api.GET("/applications/:id", h.getApplication)
+	api.GET("/applications/:id/emails", h.getApplicationEmails)
+	api.GET("/applications/:id/ical", h.getApplicationICal)
 	api.PATCH("/applications/:id", h.updateApplication)
 	api.DELETE("/applications/:id", h.deleteApplication)
-	api.GET("/applications/upcoming", h.upcomingInterviews)
 
 	debug := api.Group("/debug")
 	debug.POST("/email", h.debugInjectEmail)
@@ -228,6 +282,97 @@ func (h *Handler) deleteApplication(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"deleted": id})
 }
 
+func (h *Handler) getApplication(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	var app model.Application
+	if err := h.DB.First(&app, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	c.JSON(http.StatusOK, app)
+}
+
+func (h *Handler) getApplicationEmails(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	var emails []model.Email
+	h.DB.Where("application_id = ?", id).Order("date DESC").Find(&emails)
+	c.JSON(http.StatusOK, emails)
+}
+
+func (h *Handler) getApplicationICal(c *gin.Context) {
+	id, _ := strconv.Atoi(c.Param("id"))
+	var app model.Application
+	if err := h.DB.First(&app, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if app.NextTime == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no scheduled time"})
+		return
+	}
+
+	start := app.NextTime.UTC()
+	end := start.Add(time.Hour)
+	uid := fmt.Sprintf("app-%d@mail-classifier", app.ID)
+	summary := fmt.Sprintf("%s - %s %s", app.Company, app.Position, app.NextRound)
+	location := app.Location
+
+	ical := fmt.Sprintf(`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Mail Classifier//Interview//EN
+BEGIN:VEVENT
+UID:%s
+DTSTAMP:%s
+DTSTART:%s
+DTEND:%s
+SUMMARY:%s
+LOCATION:%s
+END:VEVENT
+END:VCALENDAR`,
+		uid,
+		time.Now().UTC().Format("20060102T150405Z"),
+		start.Format("20060102T150405Z"),
+		end.Format("20060102T150405Z"),
+		summary,
+		location,
+	)
+
+	c.Header("Content-Type", "text/calendar; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s-%s.ics", app.Company, app.Position))
+	c.String(http.StatusOK, ical)
+}
+
+func (h *Handler) getJobStats(c *gin.Context) {
+	var totalApps int64
+	h.DB.Model(&model.Application{}).Count(&totalApps)
+
+	var activeApps int64
+	h.DB.Model(&model.Application{}).Where("stage NOT IN ?", []string{"offer", "rejected"}).Count(&activeApps)
+
+	var offerCount int64
+	h.DB.Model(&model.Application{}).Where("stage = ?", "offer").Count(&offerCount)
+
+	var rejectedCount int64
+	h.DB.Model(&model.Application{}).Where("stage = ?", "rejected").Count(&rejectedCount)
+
+	weekStart := time.Now().AddDate(0, 0, -int(time.Now().Weekday()))
+	weekStart = time.Date(weekStart.Year(), weekStart.Month(), weekStart.Day(), 0, 0, 0, 0, weekStart.Location())
+	weekEnd := weekStart.AddDate(0, 0, 7)
+
+	var weekInterviews int64
+	h.DB.Model(&model.Application{}).
+		Where("next_time >= ? AND next_time < ?", weekStart, weekEnd).
+		Count(&weekInterviews)
+
+	c.JSON(http.StatusOK, gin.H{
+		"total":           totalApps,
+		"active":          activeApps,
+		"offers":          offerCount,
+		"rejected":        rejectedCount,
+		"week_interviews": weekInterviews,
+	})
+}
+
 func (h *Handler) upcomingInterviews(c *gin.Context) {
 	var apps []model.Application
 	h.DB.Where("next_time IS NOT NULL AND next_time > ?", time.Now().Add(-24*time.Hour)).
@@ -292,14 +437,19 @@ func (h *Handler) debugInjectEmail(c *gin.Context) {
 	}
 
 	preview := req.Body
-	if len(preview) > 200 {
-		preview = preview[:200]
+	runes := []rune(preview)
+	if len(runes) > 200 {
+		preview = string(runes[:200])
 	}
 
 	finalLabel := result.Stage1Label
 	if result.Stage2Label != nil && *result.Stage2Label != "" {
 		finalLabel = *result.Stage2Label
 	}
+
+	// Job classification
+	jobResult, _ := h.Classifier.PredictJob(req.Body, req.Subject)
+	isJob := jobResult != nil && jobResult.IsJob
 
 	email := model.Email{
 		AccountID:    0,
@@ -314,9 +464,7 @@ func (h *Handler) debugInjectEmail(c *gin.Context) {
 		ClassifiedAt: time.Now(),
 	}
 
-	// Job classification
-	jobResult, _ := h.Classifier.PredictJob(req.Body, req.Subject)
-	if jobResult != nil && jobResult.IsJob {
+	if isJob {
 		email.IsJob = true
 		email.JobStage = jobResult.Stage
 		entJSON, _ := json.Marshal(jobResult.Entities)
@@ -384,6 +532,9 @@ func (h *Handler) upsertApplicationFromDebug(email *model.Email, jobResult *clas
 		if len(jobResult.Entities.Location) > 0 {
 			app.Location = jobResult.Entities.Location[0]
 		}
+		if len(jobResult.Entities.Time) > 0 {
+			app.NextTime = parseChineseDateTime(jobResult.Entities.Time[0])
+		}
 		h.DB.Create(&app)
 	} else if err == nil {
 		app.Stage = jobResult.Stage
@@ -393,6 +544,9 @@ func (h *Handler) upsertApplicationFromDebug(email *model.Email, jobResult *clas
 		}
 		if len(jobResult.Entities.Round) > 0 {
 			app.NextRound = jobResult.Entities.Round[0]
+		}
+		if len(jobResult.Entities.Time) > 0 {
+			app.NextTime = parseChineseDateTime(jobResult.Entities.Time[0])
 		}
 		h.DB.Save(&app)
 	}

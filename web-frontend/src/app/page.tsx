@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { WobbleCard } from "@/components/ui/wobble-card";
 import { TextGenerateEffect } from "@/components/ui/text-generate-effect";
-import { fetchStats, fetchEmails, type LabelStat, type Email } from "@/lib/api";
+import { fetchStats, fetchEmails, fetchJobStats, fetchUpcoming, type LabelStat, type Email, type JobStats, type Application } from "@/lib/api";
 import { useWebSocket, type WsMessage } from "@/lib/use-websocket";
 import { toast } from "sonner";
 
@@ -110,15 +110,21 @@ const MOCK_EMAILS: Email[] = [
 export default function DashboardPage() {
   const [stats, setStats] = useState<LabelStat[]>([]);
   const [recentEmails, setRecentEmails] = useState<Email[]>([]);
+  const [jobStats, setJobStats] = useState<JobStats | null>(null);
+  const [upcomingInterviews, setUpcomingInterviews] = useState<Application[]>([]);
 
   const loadData = useCallback(async () => {
     try {
-      const [s, e] = await Promise.all([
+      const [s, e, js, ui] = await Promise.all([
         fetchStats(),
         fetchEmails({ page: 1, size: 10 }),
+        fetchJobStats().catch(() => null),
+        fetchUpcoming().catch(() => []),
       ]);
       setStats(s && s.length > 0 ? s : MOCK_STATS);
       setRecentEmails(e.items && e.items.length > 0 ? e.items : MOCK_EMAILS);
+      setJobStats(js);
+      setUpcomingInterviews(ui.slice(0, 3));
     } catch {
       setStats(MOCK_STATS);
       setRecentEmails(MOCK_EMAILS);
@@ -189,6 +195,81 @@ export default function DashboardPage() {
           </WobbleCard>
         ))}
       </div>
+
+      {/* Job Stats Section */}
+      {jobStats && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <Card className="bg-blue-50 border-blue-200">
+            <CardContent className="p-4">
+              <p className="text-xs text-blue-600">进行中申请</p>
+              <p className="text-2xl font-bold text-blue-800">{jobStats.active}</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-amber-50 border-amber-200">
+            <CardContent className="p-4">
+              <p className="text-xs text-amber-600">本周面试</p>
+              <p className="text-2xl font-bold text-amber-800">{jobStats.week_interviews}</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-green-50 border-green-200">
+            <CardContent className="p-4">
+              <p className="text-xs text-green-600">Offer</p>
+              <p className="text-2xl font-bold text-green-800">{jobStats.offers}</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-red-50 border-red-200">
+            <CardContent className="p-4">
+              <p className="text-xs text-red-600">未通过</p>
+              <p className="text-2xl font-bold text-red-800">{jobStats.rejected}</p>
+            </CardContent>
+          </Card>
+          <Card className="bg-slate-50 border-slate-200">
+            <CardContent className="p-4">
+              <p className="text-xs text-slate-600">总申请数</p>
+              <p className="text-2xl font-bold text-slate-800">{jobStats.total}</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Upcoming Interviews */}
+      {upcomingInterviews.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <svg className="w-5 h-5 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                <line x1="16" y1="2" x2="16" y2="6" />
+                <line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+              </svg>
+              近期面试
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {upcomingInterviews.map((app) => (
+                <div key={app.id} className="flex items-center justify-between p-3 bg-amber-50 rounded-lg">
+                  <div>
+                    <p className="text-sm font-medium">{app.company}</p>
+                    <p className="text-xs text-muted-foreground">{app.position} {app.next_round && `- ${app.next_round}`}</p>
+                  </div>
+                  {app.next_time && (
+                    <div className="text-right">
+                      <p className="text-sm font-medium">
+                        {new Date(app.next_time).toLocaleDateString("zh-CN", { month: "short", day: "numeric" })}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {new Date(app.next_time).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Recent emails */}
       <Card>

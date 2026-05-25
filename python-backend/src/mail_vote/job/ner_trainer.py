@@ -149,6 +149,8 @@ def train(
     lr: float = 0.001,
     device: str = "cpu",
     patience: int = 5,
+    hidden_dim: int = 200,
+    num_layers: int = 2,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -164,6 +166,8 @@ def train(
     model = BiLSTMCRF(
         vocab_size=vocab.vocab_size,
         char_vocab_size=vocab.char_vocab_size,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
     ).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -208,6 +212,8 @@ def train(
             meta = {
                 "vocab_size": vocab.vocab_size,
                 "char_vocab_size": vocab.char_vocab_size,
+                "hidden_dim": hidden_dim,
+                "num_layers": num_layers,
                 "best_accuracy": best_acc,
                 "epoch": epoch,
             }

@@ -1,189 +1,194 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { motion } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TextGenerateEffect } from "@/components/ui/text-generate-effect";
 import {
   fetchApplications,
+  updateApplication,
   deleteApplication,
+  fetchApplicationEmails,
   type Application,
+  type Email,
 } from "@/lib/api";
 import { useWebSocket, type WsMessage } from "@/lib/use-websocket";
 import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Separator } from "@/components/ui/separator";
+import {
+  DndContext,
+  DragOverlay,
+  closestCorners,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  type DragStartEvent,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
-const STAGES = [
-  "applied",
-  "written_test",
-  "first_interview",
-  "second_interview",
-  "hr_interview",
-  "offer",
-];
+const STAGES = ["applied", "written_test", "interview", "offer", "rejected"] as const;
+type Stage = (typeof STAGES)[number];
 
-const STAGE_CONFIG: Record<string, { label: string; icon: string }> = {
-  applied: { label: "投递简历", icon: "M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" },
-  written_test: { label: "笔试", icon: "M12 20h9M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" },
-  first_interview: { label: "一面", icon: "M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4-4v2M12 7a4 4 0 100-8 4 4 0 000 8z" },
-  second_interview: { label: "二面", icon: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2M9 7a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" },
-  hr_interview: { label: "HR面", icon: "M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2M8.5 7a4 4 0 100-8 4 4 0 000 8zM20 8v6M23 11h-6" },
-  offer: { label: "Offer", icon: "M22 11.08V12a10 10 0 11-5.93-9.14M22 4L12 14.01l-3-3" },
+const STAGE_CONFIG: Record<Stage, { label: string; color: string; bgColor: string }> = {
+  applied: { label: "已投递", color: "text-blue-600", bgColor: "bg-blue-50" },
+  written_test: { label: "笔试", color: "text-purple-600", bgColor: "bg-purple-50" },
+  interview: { label: "面试", color: "text-amber-600", bgColor: "bg-amber-50" },
+  offer: { label: "Offer", color: "text-green-600", bgColor: "bg-green-50" },
+  rejected: { label: "未通过", color: "text-red-600", bgColor: "bg-red-50" },
 };
 
-// Map backend stage + next_round to display stage
-function resolveDisplayStage(stage: string, nextRound: string): string {
-  if (stage === "offer") return "offer";
-  if (stage === "applied") return "applied";
-  if (stage === "written_test") return "written_test";
-  if (stage === "interview") {
-    const r = nextRound.toLowerCase();
-    if (r.includes("hr")) return "hr_interview";
-    if (r.includes("二") || r.includes("2") || r.includes("复")) return "second_interview";
-    return "first_interview";
-  }
-  return "applied";
+/* PLACEHOLDER_KANBAN_CARD */
+
+interface KanbanCardProps {
+  app: Application;
+  onDelete: (id: number) => void;
+  onClick: (app: Application) => void;
 }
 
-const MOCK_APPS: Application[] = [
-  {
-    id: 1,
-    account_id: 1,
-    company: "字节跳动",
-    position: "后端开发实习生-飞书办公套件",
-    stage: "interview",
-    last_email_id: 1,
-    next_time: "2026-05-11T15:00:00+08:00",
-    next_round: "一面",
-    location: "视频面试（飞书）",
-    notes: "",
-    created_at: "2026-04-28T10:00:00Z",
-    updated_at: "2026-05-09T09:00:00Z",
-  },
-  {
-    id: 2,
-    account_id: 1,
-    company: "腾讯",
-    position: "全栈开发工程师",
-    stage: "interview",
-    last_email_id: 2,
-    next_time: "2026-05-30T10:00:00Z",
-    next_round: "HR面",
-    location: "深圳市南山区",
-    notes: "",
-    created_at: "2026-05-01T08:00:00Z",
-    updated_at: "2026-05-22T11:00:00Z",
-  },
-  {
-    id: 3,
-    account_id: 1,
-    company: "阿里巴巴",
-    position: "Java开发工程师",
-    stage: "offer",
-    last_email_id: 3,
-    next_time: null,
-    next_round: "",
-    location: "杭州市余杭区",
-    notes: "",
-    created_at: "2026-04-15T09:00:00Z",
-    updated_at: "2026-05-18T16:00:00Z",
-  },
-  {
-    id: 4,
-    account_id: 1,
-    company: "美团",
-    position: "后端开发工程师",
-    stage: "interview",
-    last_email_id: 4,
-    next_time: "2026-05-25T14:00:00Z",
-    next_round: "二面",
-    location: "北京市朝阳区望京",
-    notes: "",
-    created_at: "2026-04-20T10:00:00Z",
-    updated_at: "2026-05-20T10:00:00Z",
-  },
-  {
-    id: 5,
-    account_id: 1,
-    company: "小红书",
-    position: "Go开发工程师",
-    stage: "rejected",
-    last_email_id: 5,
-    next_time: null,
-    next_round: "一面",
-    location: "",
-    notes: "一面未通过",
-    created_at: "2026-04-10T10:00:00Z",
-    updated_at: "2026-05-05T10:00:00Z",
-  },
-];
+function KanbanCard({ app, onDelete, onClick }: KanbanCardProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: app.id });
 
-function ProgressTimeline({
-  currentStage,
-  updatedAt,
-}: {
-  currentStage: string;
-  updatedAt: string;
-}) {
-  const currentIdx = STAGES.indexOf(currentStage);
-  const visibleStages = STAGES.slice(0, currentIdx + 1);
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
 
   return (
-    <div className="flex items-start gap-0.5">
-      {visibleStages.map((stage, i) => {
-        const config = STAGE_CONFIG[stage];
-        const isCurrent = i === currentIdx;
-
-        return (
-          <div key={stage} className="flex items-start">
-            <div className="flex flex-col items-center w-[68px]">
-              <div
-                className="w-10 h-10 rounded-full flex items-center justify-center bg-blue-50 border-2 border-blue-400"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="#3b82f6"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d={config.icon} />
-                </svg>
-              </div>
-              <p className="text-[11px] mt-1 text-center text-blue-600 font-medium">
-                {config.label}
-              </p>
-              {isCurrent && (
-                <p className="text-[10px] text-gray-400 mt-0.5">
-                  {new Date(updatedAt).toLocaleDateString("zh-CN")}
-                </p>
-              )}
-            </div>
-            {i < visibleStages.length - 1 && (
-              <div className="flex items-center h-10">
-                <div className="w-4 h-px bg-blue-300" />
-              </div>
-            )}
-          </div>
-        );
-      })}
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      onClick={() => onClick(app)}
+      className="bg-white rounded-lg border border-gray-200 p-3 shadow-sm cursor-grab active:cursor-grabbing hover:border-gray-300 transition-colors"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-gray-900 truncate">{app.company}</p>
+          <p className="text-xs text-gray-500 mt-0.5 truncate">{app.position}</p>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0 text-gray-400 hover:text-red-500 shrink-0"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(app.id);
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        </Button>
+      </div>
+      {app.next_round && (
+        <Badge variant="outline" className="mt-2 text-[10px] h-5">
+          {app.next_round}
+        </Badge>
+      )}
+      {app.next_time && (
+        <p className="text-[10px] text-gray-400 mt-1">
+          {new Date(app.next_time).toLocaleString("zh-CN", {
+            month: "numeric",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </p>
+      )}
     </div>
   );
 }
 
+/* PLACEHOLDER_KANBAN_COLUMN */
+
+interface KanbanColumnProps {
+  stage: Stage;
+  apps: Application[];
+  onDelete: (id: number) => void;
+  onCardClick: (app: Application) => void;
+}
+
+function KanbanColumn({ stage, apps, onDelete, onCardClick }: KanbanColumnProps) {
+  const config = STAGE_CONFIG[stage];
+  const { setNodeRef, isOver } = useDroppable({ id: stage });
+
+  return (
+    <div className="flex flex-col min-w-[240px] w-[240px] shrink-0">
+      <div className={`rounded-t-lg px-3 py-2 ${config.bgColor}`}>
+        <div className="flex items-center justify-between">
+          <span className={`text-sm font-medium ${config.color}`}>{config.label}</span>
+          <Badge variant="secondary" className="h-5 text-[10px]">
+            {apps.length}
+          </Badge>
+        </div>
+      </div>
+      <div
+        ref={setNodeRef}
+        className={`flex-1 rounded-b-lg p-2 min-h-[400px] transition-colors ${
+          isOver ? "bg-blue-100 ring-2 ring-blue-400" : "bg-gray-50"
+        }`}
+      >
+        <SortableContext items={apps.map((a) => a.id)} strategy={verticalListSortingStrategy}>
+          <div className="space-y-2">
+            {apps.map((app) => (
+              <KanbanCard key={app.id} app={app} onDelete={onDelete} onClick={onCardClick} />
+            ))}
+          </div>
+        </SortableContext>
+        {apps.length === 0 && (
+          <p className="text-xs text-gray-400 text-center py-8">拖拽卡片到此处</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* PLACEHOLDER_MAIN_COMPONENT */
+
 export default function KanbanPage() {
   const [apps, setApps] = useState<Application[]>([]);
+  const [activeApp, setActiveApp] = useState<Application | null>(null);
+  const [selectedApp, setSelectedApp] = useState<Application | null>(null);
+  const [relatedEmails, setRelatedEmails] = useState<Email[]>([]);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [notes, setNotes] = useState("");
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor)
+  );
 
   const loadApps = useCallback(async () => {
     try {
       const res = await fetchApplications();
-      const items = res.items || [];
-      setApps(items.length > 0 ? items : MOCK_APPS);
-    } catch {
-      setApps(MOCK_APPS);
+      setApps(res.items || []);
+    } catch (err) {
+      console.error("Failed to load applications:", err);
+      setApps([]);
     }
   }, []);
 
@@ -215,69 +220,194 @@ export default function KanbanPage() {
     toast("已删除");
   };
 
+  const handleCardClick = async (app: Application) => {
+    setSelectedApp(app);
+    setNotes(app.notes || "");
+    setDialogOpen(true);
+    try {
+      const emails = await fetchApplicationEmails(app.id);
+      setRelatedEmails(emails || []);
+    } catch {
+      setRelatedEmails([]);
+    }
+  };
+
+  const handleSaveNotes = async () => {
+    if (!selectedApp) return;
+    try {
+      await updateApplication(selectedApp.id, { notes });
+      setApps((prev) =>
+        prev.map((a) => (a.id === selectedApp.id ? { ...a, notes } : a))
+      );
+      toast("备注已保存");
+    } catch {
+      toast.error("保存失败");
+    }
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const app = apps.find((a) => a.id === event.active.id);
+    setActiveApp(app || null);
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setActiveApp(null);
+    const { active, over } = event;
+    if (!over) return;
+
+    const draggedApp = apps.find((a) => a.id === active.id);
+    if (!draggedApp) return;
+
+    const overId = over.id;
+    let targetStage: Stage | null = null;
+
+    if (STAGES.includes(overId as Stage)) {
+      targetStage = overId as Stage;
+    } else {
+      const overApp = apps.find((a) => a.id === overId);
+      if (overApp) {
+        targetStage = overApp.stage as Stage;
+      }
+    }
+
+    if (targetStage && targetStage !== draggedApp.stage) {
+      setApps((prev) =>
+        prev.map((a) => (a.id === draggedApp.id ? { ...a, stage: targetStage! } : a))
+      );
+
+      try {
+        await updateApplication(draggedApp.id, { stage: targetStage });
+        toast(`已更新: ${draggedApp.company} → ${STAGE_CONFIG[targetStage].label}`);
+      } catch {
+        setApps((prev) =>
+          prev.map((a) => (a.id === draggedApp.id ? { ...a, stage: draggedApp.stage } : a))
+        );
+        toast.error("更新失败");
+      }
+    }
+  };
+
+  const groupedApps = STAGES.reduce(
+    (acc, stage) => {
+      acc[stage] = apps.filter((a) => a.stage === stage);
+      return acc;
+    },
+    {} as Record<Stage, Application[]>
+  );
+
   return (
-    <div className="h-screen overflow-auto p-6">
-      <TextGenerateEffect words="求职看板" className="text-2xl mb-6" />
+    <div className="h-screen overflow-hidden flex flex-col p-6">
+      <TextGenerateEffect words="求职看板" className="text-2xl mb-4 shrink-0" />
+      <p className="text-sm text-muted-foreground mb-4 shrink-0">
+        拖拽卡片到不同列以更新申请状态
+      </p>
 
-      {apps.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          暂无求职记录。当收到求职相关邮件时，会自动创建追踪记录。
-        </p>
-      ) : (
-        <div className="space-y-3">
-          {apps.map((app, i) => {
-            const isRejected = app.stage === "rejected";
-            const displayStage = isRejected
-              ? resolveDisplayStage("interview", app.next_round)
-              : resolveDisplayStage(app.stage, app.next_round);
-
-            return (
-              <motion.div
-                key={app.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.06 }}
-              >
-                <div
-                  className={`rounded-lg border bg-white p-5 transition-colors ${
-                    isRejected ? "border-red-100 opacity-60" : "border-gray-100 hover:border-gray-200"
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">
-                          {app.company}
-                        </p>
-                        <p className="text-xs text-gray-500 mt-0.5">
-                          {app.position}
-                        </p>
-                      </div>
-                      {isRejected && (
-                        <Badge variant="destructive" className="text-[10px] h-5">
-                          未通过
-                        </Badge>
-                      )}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-xs text-gray-400 h-7 px-2"
-                      onClick={() => handleDelete(app.id)}
-                    >
-                      删除
-                    </Button>
-                  </div>
-                  <ProgressTimeline
-                    currentStage={displayStage}
-                    updatedAt={app.updated_at}
-                  />
-                </div>
-              </motion.div>
-            );
-          })}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="flex-1 overflow-x-auto">
+          <div className="flex gap-4 min-w-max pb-4">
+            {STAGES.map((stage) => (
+              <KanbanColumn
+                key={stage}
+                stage={stage}
+                apps={groupedApps[stage]}
+                onDelete={handleDelete}
+                onCardClick={handleCardClick}
+              />
+            ))}
+          </div>
         </div>
-      )}
+
+        <DragOverlay>
+          {activeApp && (
+            <div className="bg-white rounded-lg border-2 border-blue-400 p-3 shadow-lg w-[220px]">
+              <p className="text-sm font-medium text-gray-900">{activeApp.company}</p>
+              <p className="text-xs text-gray-500 mt-0.5">{activeApp.position}</p>
+            </div>
+          )}
+        </DragOverlay>
+      </DndContext>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{selectedApp?.company} - {selectedApp?.position}</DialogTitle>
+          </DialogHeader>
+          {selectedApp && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <span className="text-gray-500">阶段:</span>
+                  <Badge className="ml-2" variant="outline">
+                    {STAGE_CONFIG[selectedApp.stage as Stage]?.label || selectedApp.stage}
+                  </Badge>
+                </div>
+                {selectedApp.next_round && (
+                  <div>
+                    <span className="text-gray-500">轮次:</span>
+                    <span className="ml-2">{selectedApp.next_round}</span>
+                  </div>
+                )}
+                {selectedApp.location && (
+                  <div>
+                    <span className="text-gray-500">地点:</span>
+                    <span className="ml-2">{selectedApp.location}</span>
+                  </div>
+                )}
+                {selectedApp.next_time && (
+                  <div>
+                    <span className="text-gray-500">时间:</span>
+                    <span className="ml-2">
+                      {new Date(selectedApp.next_time).toLocaleString("zh-CN")}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
+              <div>
+                <label className="text-sm text-gray-500 block mb-1">备注</label>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="w-full h-20 p-2 text-sm border rounded-md resize-none"
+                  placeholder="添加备注..."
+                />
+              </div>
+
+              {relatedEmails.length > 0 && (
+                <>
+                  <Separator />
+                  <div>
+                    <p className="text-sm text-gray-500 mb-2">关联邮件 ({relatedEmails.length})</p>
+                    <div className="space-y-2 max-h-32 overflow-auto">
+                      {relatedEmails.map((email) => (
+                        <div key={email.ID} className="text-xs p-2 bg-gray-50 rounded">
+                          <p className="font-medium truncate">{email.subject}</p>
+                          <p className="text-gray-400">
+                            {new Date(email.date).toLocaleDateString("zh-CN")}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              关闭
+            </Button>
+            <Button onClick={handleSaveNotes}>保存备注</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

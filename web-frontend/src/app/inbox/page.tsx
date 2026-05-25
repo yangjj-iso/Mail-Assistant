@@ -13,6 +13,7 @@ import { toast } from "sonner";
 const LABELS = [
   "all",
   "spam",
+  "job",
   "forum",
   "promotions",
   "social_media",
@@ -23,6 +24,7 @@ const LABELS = [
 const LABEL_NAMES: Record<string, string> = {
   all: "全部",
   spam: "垃圾邮件",
+  job: "求职",
   forum: "论坛",
   promotions: "推广",
   social_media: "社交媒体",
@@ -33,6 +35,7 @@ const LABEL_NAMES: Record<string, string> = {
 const LABEL_COLORS: Record<string, string> = {
   spam: "bg-red-100 text-red-800",
   ham: "bg-green-100 text-green-800",
+  job: "bg-emerald-100 text-emerald-800",
   forum: "bg-blue-100 text-blue-800",
   promotions: "bg-yellow-100 text-yellow-800",
   social_media: "bg-purple-100 text-purple-800",

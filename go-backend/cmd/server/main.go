@@ -26,12 +26,17 @@ func main() {
 
 	h.ImapMgr.StartAll()
 
+	reminderSvc := handler.NewReminderService(db, hub)
+	reminderSvc.Start()
+	defer reminderSvc.Stop()
+
 	r := gin.Default()
 	r.Use(corsMiddleware())
 	h.RegisterRoutes(r)
 
 	log.Printf("Go backend starting on :%s", cfg.Port)
 	log.Printf("ML service: %s", cfg.MLServiceURL)
+	log.Printf("Interview reminder service started")
 	if err := r.Run(":" + cfg.Port); err != nil {
 		log.Fatalf("server error: %v", err)
 	}

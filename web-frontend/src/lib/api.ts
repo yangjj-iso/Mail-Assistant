@@ -136,3 +136,30 @@ export async function fetchUpcoming(): Promise<Application[]> {
   const res = await fetchWithTimeout(`${API_BASE}/api/applications/upcoming`);
   return res.json();
 }
+
+export async function fetchApplication(id: number): Promise<Application> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/applications/${id}`);
+  return res.json();
+}
+
+export async function fetchApplicationEmails(id: number): Promise<Email[]> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/applications/${id}/emails`);
+  return res.json();
+}
+
+export function getApplicationICalUrl(id: number): string {
+  return `${API_BASE}/api/applications/${id}/ical`;
+}
+
+export interface JobStats {
+  total: number;
+  active: number;
+  offers: number;
+  rejected: number;
+  week_interviews: number;
+}
+
+export async function fetchJobStats(): Promise<JobStats> {
+  const res = await fetchWithTimeout(`${API_BASE}/api/stats/job`);
+  return res.json();
+}

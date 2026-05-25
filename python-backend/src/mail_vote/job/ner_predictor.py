@@ -24,6 +24,8 @@ class NERPredictor:
         self.model = BiLSTMCRF(
             vocab_size=meta["vocab_size"],
             char_vocab_size=meta["char_vocab_size"],
+            hidden_dim=meta.get("hidden_dim", 200),
+            num_layers=meta.get("num_layers", 2),
         ).to(device)
         self.model.load_state_dict(
             torch.load(model_dir / "model.pt", map_location=device, weights_only=True)
@@ -34,7 +36,7 @@ class NERPredictor:
         tokens: List[str] = []
         buf = ""
         for ch in text:
-            if ch.isascii() and ch.isalpha():
+            if ch.isascii() and (ch.isalpha() or ch.isdigit() or ch == ':'):
                 buf += ch
             else:
                 if buf:

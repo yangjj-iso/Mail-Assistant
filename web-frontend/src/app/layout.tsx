@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { Sidebar } from "@/components/sidebar";
+import { NotificationProvider } from "@/components/notification-provider";
 
 export const metadata: Metadata = {
   title: "Mail Assistant",
@@ -22,9 +23,11 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-full flex font-['JetBrains_Mono',monospace]">
-        <Sidebar />
-        <main className="flex-1 overflow-hidden">{children}</main>
-        <Toaster />
+        <NotificationProvider>
+          <Sidebar />
+          <main className="flex-1 overflow-hidden">{children}</main>
+          <Toaster />
+        </NotificationProvider>
       </body>
     </html>
   );
